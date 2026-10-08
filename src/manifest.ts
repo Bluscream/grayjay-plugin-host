@@ -265,6 +265,23 @@ export function assertSupported(manifest: Manifest): void {
 }
 
 /**
+ * Whether a manifest asks to reach **any** host.
+ *
+ * Worth asking separately rather than leaving inside {@link allowsUrl}, because it is a materially
+ * different proposition: every other plugin names the hosts it needs and is held to them, while
+ * these five in the public index declare `everywhere` and are bounded by nothing. The app runs them
+ * anyway, and so does this — but a caller running plugins on a server should be able to see it and
+ * decide, which it cannot do if the fact is buried in a predicate.
+ */
+export function reachesAnywhere(manifest: Manifest): boolean {
+	return manifest.allowUrls.some((entry) => {
+		const pattern = entry.trim().toLowerCase();
+
+		return pattern === 'everywhere' || pattern === '*';
+	});
+}
+
+/**
  * Whether a URL is inside a plugin's allow-list.
  *
  * Host-only and case-insensitive. Three rules, taken from how the published manifests are written:
@@ -293,12 +310,20 @@ export function allowsUrl(allowUrls: readonly string[], url: string): boolean {
 	const host = parsed.hostname.toLowerCase();
 
 	return allowUrls.some((entry) => {
-		const pattern = entry.trim().toLowerCase().replace(/^\*/, '');
+		const pattern = entry.trim().toLowerCase();
 
-		if (pattern === '') return false;
-		if (pattern.startsWith('.')) return host.endsWith(pattern);
+		// GrayJay's own wildcard, and it is a literal word rather than a glob. Treating it as a
+		// hostname pattern is what this did at first, and the result was silent: no host ends with
+		// `.everywhere`, so every request a PeerTube or Bandcamp plugin made came back refused and
+		// the plugin reported an empty feed — indistinguishable from the platform having nothing.
+		if (pattern === 'everywhere' || pattern === '*') return true;
 
-		return host === pattern || host.endsWith(`.${pattern}`);
+		const suffix = pattern.replace(/^\*/, '');
+
+		if (suffix === '') return false;
+		if (suffix.startsWith('.')) return host.endsWith(suffix);
+
+		return host === suffix || host.endsWith(`.${suffix}`);
 	});
 }
 

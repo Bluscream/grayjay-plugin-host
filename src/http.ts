@@ -84,6 +84,27 @@ export interface HttpPolicy {
 	/** Sent when the plugin does not set one. Several platforms answer differently without it. */
 	readonly userAgent: string;
 
+	/**
+	 * Whether the plugin may reach a private or loopback address. **Off by default.**
+	 *
+	 * This matters because of `allowUrls: ["everywhere"]`, which five plugins in the public index
+	 * declare and which means exactly what it says. On a desktop app that is a plugin reaching the
+	 * internet; on a server it is a plugin that can reach `169.254.169.254` for cloud instance
+	 * credentials, or anything else on the host's network that is reachable without authentication
+	 * because it was never meant to be reachable from outside.
+	 *
+	 * So a literal private, loopback, link-local or unique-local address is refused regardless of
+	 * what the manifest allows. Turn this on deliberately — for a self-hosted PeerTube on the same
+	 * network, which is a real case — and not by default.
+	 *
+	 * **What this does not catch:** a *hostname* that resolves to a private address. Name resolution
+	 * happens inside `fetch`, so there is no point at which this could check the answer without
+	 * resolving separately and leaving a window between the check and the connection. Guarding that
+	 * properly needs control of the socket, which this library does not have. If a plugin running on
+	 * your network is part of your threat model, give it a `fetch` of your own that does.
+	 */
+	readonly allowPrivateHosts?: boolean | undefined;
+
 	/** Called for each request, so a caller can log or count. Never given the response body. */
 	readonly onRequest?: ((event: { method: string; url: string; code: number }) => void) | undefined;
 
@@ -101,6 +122,89 @@ export interface HttpPolicy {
 	 * transport failure, so it cannot take down a feed read.
 	 */
 	readonly fetch?: FetchLike | undefined;
+}
+
+/**
+ * The IPv4 address an IPv4-mapped IPv6 address names, or null when it is not one.
+ *
+ * Both spellings: `::ffff:1.2.3.4` as written, and `::ffff:102:304` as `URL` normalises it. The
+ * second is the one that matters — the dotted form never survives parsing, so a check looking for a
+ * `.` here passes every mapped address straight through.
+ */
+function mappedToV4(inner: string): string | null {
+	const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(inner);
+
+	if (dotted?.[1] !== undefined) return dotted[1];
+
+	const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(inner);
+
+	if (hex?.[1] === undefined || hex[2] === undefined) return null;
+
+	const high = Number.parseInt(hex[1], 16);
+	const low = Number.parseInt(hex[2], 16);
+
+	return [high >> 8, high & 255, low >> 8, low & 255].join('.');
+}
+
+/**
+ * Whether a url names a literal address that is not on the public internet.
+ *
+ * Literal addresses only, by design — see {@link HttpPolicy.allowPrivateHosts} for why a hostname
+ * cannot be checked here honestly. Written against the ranges rather than pulled from a dependency
+ * because it is twenty lines and a dependency for this would be one more thing to trust.
+ */
+export function isPrivateHost(url: string): boolean {
+	let host: string;
+
+	try {
+		host = new URL(url).hostname.toLowerCase();
+	} catch {
+		// An unparseable url is refused by the allow-list before this, so the answer here is moot —
+		// `true` is the safe one either way.
+		return true;
+	}
+
+	// `localhost` and anything under it, which resolvers send to loopback.
+	if (host === 'localhost' || host.endsWith('.localhost')) return true;
+
+	// IPv6, which `URL` gives back in brackets.
+	if (host.startsWith('[')) {
+		const inner = host.slice(1, -1);
+		const mapped = mappedToV4(inner);
+
+		// Decided on the address it actually names, not on its spelling.
+		if (mapped !== null) return isPrivateHost(`http://${mapped}`);
+
+		return (
+			inner === '::1' ||
+			inner === '::' ||
+			// Unique-local (fc00::/7) and link-local (fe80::/10).
+			/^f[cd][0-9a-f]{2}:/.test(inner) ||
+			/^fe[89ab][0-9a-f]:/.test(inner) ||
+			// An IPv4 address wearing an IPv6 hat, which is the obvious way round a v4-only check.
+			// `URL` normalises `::ffff:169.254.169.254` to `::ffff:a9fe:a9fe`, so the dotted form is
+			// gone by the time this sees it and the two hextets have to be decoded back. Checking for
+			// a `.` was the first attempt and it never fired once.
+			mappedToV4(inner) !== null
+		);
+	}
+
+	const octets = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+
+	if (octets === null) return false;
+
+	const [a, b] = [Number(octets[1]), Number(octets[2])];
+
+	return (
+		a === 0 || // this network
+		a === 10 || // private
+		a === 127 || // loopback
+		(a === 169 && b === 254) || // link-local, which is where cloud metadata lives
+		(a === 172 && b >= 16 && b <= 31) || // private
+		(a === 192 && b === 168) || // private
+		(a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
+		a >= 224 // multicast and reserved
+	);
 }
 
 /** A refusal that the plugin sees as a failed response rather than an exception. */
@@ -146,6 +250,12 @@ export class HttpSession {
 			// Deliberately does not echo the whole URL back into the sandbox — it already knows what it
 			// asked for — but names the host so a caller's log says which allow-list entry is missing.
 			return refused(`${hostOf(request.url)} is not in the plugin allowUrls`);
+		}
+
+		// Checked after the allow-list and independently of it, because a manifest saying `everywhere`
+		// means the allow-list is no longer a bound at all. See `allowPrivateHosts`.
+		if (this.policy.allowPrivateHosts !== true && isPrivateHost(request.url)) {
+			return refused(`${hostOf(request.url)} is a private address`);
 		}
 
 		this.used += 1;

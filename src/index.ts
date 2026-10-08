@@ -54,6 +54,7 @@ export {
 	assertSupported,
 	manifestSchema,
 	parseManifest,
+	reachesAnywhere,
 	unsupportedReasons
 } from './manifest.js';
 export type { Manifest, PackageName, RawManifest } from './manifest.js';
@@ -61,7 +62,7 @@ export type { Manifest, PackageName, RawManifest } from './manifest.js';
 export { DEFAULT_DOM_LIMITS, DomRefused, DomSession } from './dom.js';
 export type { DomLimits } from './dom.js';
 
-export { HttpSession } from './http.js';
+export { HttpSession, isPrivateHost } from './http.js';
 export type { FetchLike, HostRequest, HostResponse, HttpPolicy } from './http.js';
 
 export { parseUrl } from './url.js';

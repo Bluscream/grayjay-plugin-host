@@ -86,6 +86,14 @@ export interface LoadOptions {
 	 * Pass `false` to forbid it outright, or an object to set the limits.
 	 */
 	readonly dom?: boolean | Partial<DomLimits> | undefined;
+
+	/**
+	 * Whether the plugin may reach a private or loopback address. Off by default.
+	 *
+	 * See `HttpPolicy.allowPrivateHosts`, including what it does not catch. Turn it on for something
+	 * self-hosted on your own network, which is a real case for a PeerTube instance.
+	 */
+	readonly allowPrivateHosts?: boolean | undefined;
 }
 
 /** A loaded plugin. */
@@ -160,7 +168,10 @@ export async function loadPlugin(source: string, options: LoadOptions = {}): Pro
 			maxRequests: options.maxRequests ?? 60,
 			maxResponseBytes: options.maxResponseBytes ?? 16 * 1024 * 1024,
 			userAgent: options.userAgent ?? DEFAULT_USER_AGENT,
-			...(options.fetch === undefined ? {} : { fetch: options.fetch })
+			...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+			...(options.allowPrivateHosts === undefined
+				? {}
+				: { allowPrivateHosts: options.allowPrivateHosts })
 		}
 	});
 

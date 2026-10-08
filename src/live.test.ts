@@ -22,7 +22,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { loadPlugin } from './plugin.js';
-import { assertSupported, parseManifest } from './manifest.js';
+import { assertSupported, parseManifest, reachesAnywhere } from './manifest.js';
 import type { Plugin } from './plugin.js';
 
 const live = process.env.RUN_LIVE === '1' ? describe : describe.skip;
@@ -217,6 +217,30 @@ live('a plugin that scrapes HTML', () => {
 		},
 		180_000
 	);
+});
+
+live('a plugin allowed everywhere', () => {
+	it('reads a federated instance it could not have named in advance', async () => {
+		// PeerTube declares `allowUrls: ["everywhere"]` because it is federated: the instance a
+		// channel lives on cannot be in a fixed list. Until the wildcard was recognised this was
+		// silent — no host ends with `.everywhere`, so every request came back refused and the
+		// plugin reported an empty feed that looked exactly like an instance with nothing on it.
+		const plugin = await loadPlugin('https://plugins.grayjay.app/PeerTube/PeerTubeConfig.json', {
+			maxRequests: 150,
+			timeoutMs: 30_000
+		});
+
+		try {
+			expect(reachesAnywhere(plugin.manifest)).toBe(true);
+
+			const feed = await plugin.feed('https://peertube.futo.org/video-channels/futo');
+
+			expect(feed.results.length).toBeGreaterThan(0);
+			expect(String((feed.results[0] as { url?: unknown }).url)).toMatch(/^https:\/\//);
+		} finally {
+			plugin.dispose();
+		}
+	}, 180_000);
 });
 
 live('a plugin this host cannot run', () => {

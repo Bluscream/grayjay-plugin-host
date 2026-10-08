@@ -146,6 +146,26 @@ The allow-list is **enforced**, not recorded. A request outside it never reaches
 plugin as a 403-shaped response rather than an exception, because that is the path the plugin's own
 error handling already takes — several plugins probe optional endpoints deliberately.
 
+### `allowUrls: ["everywhere"]`
+
+Five plugins in the public index declare exactly that, and it means what it says — PeerTube needs it
+because it is federated, so the instance a channel lives on cannot be in a fixed list. It is
+honoured, and `reachesAnywhere(manifest)` reports it so you can refuse such a plugin before running
+it.
+
+Because that removes the allow-list as a bound, **a literal private, loopback, link-local or
+multicast address is refused regardless of what the manifest allows.** On a desktop app a wildcard
+is a plugin reaching the internet; on a server the interesting target is `169.254.169.254` for
+instance credentials, or whatever else on your network answers without authentication because nobody
+expected it to be reachable. Set `allowPrivateHosts: true` to permit it deliberately — for a
+self-hosted instance on your own network, which is a real case.
+
+This catches literal addresses, including IPv4-mapped IPv6 ones. It does **not** catch a hostname
+that resolves to a private address: resolution happens inside `fetch`, so there is no point at which
+this could check the answer without leaving a window between the check and the connection. Guarding
+that needs control of the socket; if a plugin on your network is in your threat model, pass a
+`fetch` of your own that does it.
+
 None of this makes it safe to run an arbitrary plugin against a secret. It makes it bounded.
 
 ### Route it through your own client
