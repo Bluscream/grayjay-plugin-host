@@ -745,3 +745,135 @@ describe('an injected fetch', () => {
 		}
 	});
 });
+
+describe('the data-carrier classes', () => {
+	// GrayJay's classes come in two shapes and a host that assumes one corrupts the other. The small
+	// value classes take positional arguments; the big content classes take a single object.
+	//
+	// Assuming the object form everywhere was silent rather than loud, which is why this block exists:
+	// `for (var k in 'kick')` iterates a string's indices, so `new PlatformID('kick')` produced
+	// `{ 0: 'k', 1: 'i', 2: 'c', 3: 'k', value: '' }` — an object that serialises cleanly, passes
+	// every shape check, and carries none of the data. The live test missed it because it only
+	// asserted that a video's name and url were strings. It was found by consuming a real feed.
+
+	it('fills a value class from positional arguments', async () => {
+		const sandbox = await load(
+			`source.v = function () { return new PlatformID('kick', '12345', 'kick-plugin'); };`
+		);
+
+		try {
+			expect(await sandbox.call('v')).toStrictEqual({
+				platform: 'kick',
+				value: '12345',
+				pluginId: 'kick-plugin',
+				claimType: 0,
+				claimFieldType: -1,
+				__type: 'PlatformID'
+			});
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('does not spread a string argument by index', async () => {
+		// The specific corruption, asserted on its own so the cause is named if it returns.
+		const sandbox = await load(
+			`source.v = function () { return Object.keys(new Thumbnail('https://x.test/a.jpg', 720)); };`
+		);
+
+		try {
+			expect(await sandbox.call('v')).toStrictEqual(['url', 'quality', '__type']);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('keeps its declared defaults for arguments that were not passed', async () => {
+		const sandbox = await load(
+			`source.v = function () { return new Thumbnail('https://x.test/a.jpg'); };`
+		);
+
+		try {
+			expect(await sandbox.call('v')).toStrictEqual({
+				url: 'https://x.test/a.jpg',
+				quality: 0,
+				__type: 'Thumbnail'
+			});
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('still accepts the object form, which the content classes use', async () => {
+		const sandbox = await load(`
+			source.v = function () {
+				return new PlatformVideo({ name: 'a stream', url: 'https://kick.com/x/videos/1', duration: 90 });
+			};
+		`);
+
+		try {
+			const video = (await sandbox.call('v')) as Record<string, unknown>;
+
+			expect(video.name).toBe('a stream');
+			expect(video.url).toBe('https://kick.com/x/videos/1');
+			expect(video.duration).toBe(90);
+			expect(video.isLive).toBe(false);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('treats a single array argument as positional, not as an object', async () => {
+		// `new Thumbnails([...])` is one argument and is positional, which is why "one argument" alone
+		// cannot be the rule — an array has to not count as a plain object.
+		const sandbox = await load(`
+			source.v = function () {
+				return new Thumbnails([new Thumbnail('https://x.test/a.jpg', 720)]).sources[0].url;
+			};
+		`);
+
+		try {
+			expect(await sandbox.call('v')).toBe('https://x.test/a.jpg');
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('builds a nested author the way a real plugin does', async () => {
+		// The exact construction the Kick plugin performs, which is what first exposed the bug.
+		const sandbox = await load(`
+			source.v = function () {
+				return new PlatformAuthorLink(
+					new PlatformID('kick', 'xqc', 'kick-plugin'),
+					'xQc',
+					'https://kick.com/xqc',
+					'https://files.kick.com/a.jpg',
+					1234
+				);
+			};
+		`);
+
+		try {
+			const author = (await sandbox.call('v')) as Record<string, Record<string, unknown>>;
+
+			expect(author.name).toBe('xQc');
+			expect(author.url).toBe('https://kick.com/xqc');
+			expect(author.id?.value).toBe('xqc');
+			expect(author.subscribers).toBe(1234);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('is a real constructor a plugin can instanceof', async () => {
+		const sandbox = await load(
+			`source.v = function () { return new PlatformID('kick', '1') instanceof PlatformID; };`
+		);
+
+		try {
+			expect(await sandbox.call('v')).toBe(true);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+});

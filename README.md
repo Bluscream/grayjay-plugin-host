@@ -141,7 +141,14 @@ one:
    neither — and Twitch calls `btoa` at load time.
 9. A plugin method may return nothing, and a guest `undefined` read back out of the engine is the
    _string_ `"undefined"`. Kick's `enable` returns nothing.
-10. **The declared feed capabilities cannot be trusted.** TikTok's `getChannelCapabilities()` returns
+10. **The data classes come in two shapes.** The content classes take one object
+    (`new PlatformVideo({ ... })`); the small value classes take positional arguments
+    (`new PlatformID(platform, value, pluginId)`). Assuming the object form everywhere is silent,
+    not loud: `for (var k in 'kick')` walks a string's indices, so an id arrives as
+    `{ 0: 'k', 1: 'i', ... }` that serialises cleanly and carries nothing.
+11. **A plugin may populate a field next to the documented one.** Kick's videos leave `datetime` at
+    `0` and put unix seconds in `uploadDate`, so read both before deciding a feed has no dates.
+12. **The declared feed capabilities cannot be trusted.** TikTok's `getChannelCapabilities()` returns
     `["VIDEOS","MIXED","LIVE"]` and the plugin then refuses `VIDEOS`; YouTube refuses `MIXED`. A host
     has to _try_, in an order, and treat a refusal as "not this one".
 

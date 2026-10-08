@@ -117,6 +117,34 @@ live.each(TARGETS)('the published $name plugin', (target) => {
 
 				expect(typeof first.name).toBe('string');
 				expect(typeof first.url).toBe('string');
+
+				// The nested value classes, because asserting only the flat string fields is what let a
+				// real bug through: the carriers were spreading a positional string argument by index,
+				// so `id` arrived as `{ 0: 'k', 1: 'i', ... }` while `name` and `url` stayed perfectly
+				// fine. A shape check that cannot fail on corrupt data is not a check.
+				const id = first.id as Record<string, unknown> | undefined;
+
+				if (id !== undefined) {
+					expect(typeof id.value).toBe('string');
+					expect(String(id.value).length).toBeGreaterThan(0);
+
+					// No numeric keys: that is the corruption itself, stated directly.
+					expect(Object.keys(id).filter((key) => /^\d+$/.test(key))).toStrictEqual([]);
+				}
+
+				const author = first.author as Record<string, unknown> | undefined;
+
+				if (author !== undefined) {
+					expect(typeof author.name).toBe('string');
+					expect(String(author.url)).toContain('http');
+				}
+
+				const thumbnails = first.thumbnails as { sources?: unknown[] } | undefined;
+				const thumbnail = thumbnails?.sources?.[0] as Record<string, unknown> | undefined;
+
+				if (thumbnail !== undefined) {
+					expect(String(thumbnail.url)).toMatch(/^https?:\/\//);
+				}
 			}
 		});
 	}, 180_000);

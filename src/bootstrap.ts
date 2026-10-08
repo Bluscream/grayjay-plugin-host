@@ -259,13 +259,44 @@ export const BOOTSTRAP = /* js */ `
 	};
 
 	// ── the data-carrier classes ─────────────────────────────────────────────────────────────
-	// Real constructors, so a plugin can \`instanceof\` and subclass them. Every one takes a single
-	// object argument and copies it, which is how the app's own classes behave.
-	function carrier(name, defaults) {
-		var Ctor = function (obj) {
-			var src = obj || {};
+	// Real constructors, so a plugin can \`instanceof\` and subclass them.
+	//
+	// GrayJay's own classes come in two shapes, and a host that assumes one of them silently
+	// corrupts the other. The big content classes take a single object — \`new PlatformVideo({ id,
+	// name, ... })\` — while the small value classes take **positional** arguments, as in
+	// \`new PlatformID(platform, value, pluginId)\` and \`new Thumbnail(url, quality)\`.
+	//
+	// Assuming the object form everywhere is silent and bad rather than loud: \`for (var k in 'kick')\`
+	// iterates a string's *indices*, so \`new PlatformID('kick')\` produced
+	// \`{ 0: 'k', 1: 'i', 2: 'c', 3: 'k', value: '' }\` — an object that serialises, survives every
+	// shape check, and carries none of the data. It was found by consuming a real feed, not by the
+	// live test, which only asserted that a video's name and url were strings.
+	//
+	// So both forms are accepted, and the discrimination is on the arguments rather than configured:
+	// one argument that is a plain object means the object form, and anything else is positional.
+	// An array does not count as a plain object, because \`new Thumbnails([...])\` is positional with
+	// a single argument. A class given no positional names is object-only, which is the correct
+	// reading of a content class.
+	function plainObject(value) {
+		return typeof value === 'object' && value !== null && !Array.isArray(value);
+	}
+
+	function carrier(name, defaults, positional) {
+		var Ctor = function () {
 			for (var key in defaults) { if (Object.prototype.hasOwnProperty.call(defaults, key)) this[key] = defaults[key]; }
-			for (var k in src) { if (Object.prototype.hasOwnProperty.call(src, k)) this[k] = src[k]; }
+
+			var names = positional || [];
+			var objectForm = arguments.length <= 1 && (arguments.length === 0 || plainObject(arguments[0]));
+
+			if (names.length > 0 && !objectForm) {
+				for (var i = 0; i < names.length && i < arguments.length; i++) {
+					if (arguments[i] !== undefined) this[names[i]] = arguments[i];
+				}
+			} else {
+				var src = arguments[0] || {};
+				for (var k in src) { if (Object.prototype.hasOwnProperty.call(src, k)) this[k] = src[k]; }
+			}
+
 			this.__type = name;
 		};
 		Ctor.prototype.toString = function () { return name; };
@@ -273,9 +304,9 @@ export const BOOTSTRAP = /* js */ `
 		return Ctor;
 	}
 
-	carrier('PlatformID', { platform: '', value: '', pluginId: '', claimType: 0, claimFieldType: -1 });
-	carrier('PlatformAuthorLink', { id: null, name: '', url: '', thumbnail: null, subscribers: null });
-	carrier('Thumbnail', { url: '', quality: 0 });
+	carrier('PlatformID', { platform: '', value: '', pluginId: '', claimType: 0, claimFieldType: -1 }, ['platform', 'value', 'pluginId', 'claimType', 'claimFieldType']);
+	carrier('PlatformAuthorLink', { id: null, name: '', url: '', thumbnail: null, subscribers: null }, ['id', 'name', 'url', 'thumbnail', 'subscribers']);
+	carrier('Thumbnail', { url: '', quality: 0 }, ['url', 'quality']);
 	carrier('PlatformVideo', { id: null, name: '', thumbnails: null, author: null, datetime: 0, duration: 0, viewCount: 0, url: '', shareUrl: '', isLive: false });
 	carrier('PlatformVideoDetails', { id: null, name: '', thumbnails: null, author: null, datetime: 0, duration: 0, viewCount: 0, url: '', shareUrl: '', isLive: false, description: '', video: null, rating: null, subtitles: [] });
 	carrier('PlatformContent', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '' });
@@ -285,14 +316,14 @@ export const BOOTSTRAP = /* js */ `
 	carrier('PlatformPlaylist', { id: null, name: '', author: null, datetime: 0, url: '', videoCount: 0, thumbnail: null });
 	carrier('PlatformPlaylistDetails', { id: null, name: '', author: null, datetime: 0, url: '', videoCount: 0, thumbnail: null, contents: null });
 	carrier('PlatformComment', { contextUrl: '', author: null, message: '', rating: null, date: 0, replyCount: 0, context: {} });
-	carrier('PlatformAuthorMembershipLink', { id: null, name: '', url: '', thumbnail: null, subscribers: null, membershipUrl: null });
-	carrier('PlatformSubtitles', { name: '', url: '', format: null });
-	carrier('ResultCapabilities', { types: [], sorts: [], filters: [] });
-	carrier('LiveEventComment', { name: '', message: '', thumbnail: null, colorName: null, badges: [] });
-	carrier('LiveEventEmojis', { emojis: {} });
-	carrier('LiveEventDonation', { name: '', message: '', thumbnail: null, amount: '', colorDonation: null });
-	carrier('LiveEventViewCount', { viewCount: 0 });
-	carrier('LiveEventRaid', { targetName: '', targetThumbnail: '', targetUrl: '', isOutgoing: false });
+	carrier('PlatformAuthorMembershipLink', { id: null, name: '', url: '', thumbnail: null, subscribers: null, membershipUrl: null }, ['id', 'name', 'url', 'thumbnail', 'subscribers', 'membershipUrl']);
+	carrier('PlatformSubtitles', { name: '', url: '', format: null }, ['name', 'url', 'format']);
+	carrier('ResultCapabilities', { types: [], sorts: [], filters: [] }, ['types', 'sorts', 'filters']);
+	carrier('LiveEventComment', { name: '', message: '', thumbnail: null, colorName: null, badges: [] }, ['name', 'message', 'thumbnail', 'colorName', 'badges']);
+	carrier('LiveEventEmojis', { emojis: {} }, ['emojis']);
+	carrier('LiveEventDonation', { name: '', message: '', thumbnail: null, amount: '', colorDonation: null }, ['name', 'message', 'thumbnail', 'amount', 'colorDonation']);
+	carrier('LiveEventViewCount', { viewCount: 0 }, ['viewCount']);
+	carrier('LiveEventRaid', { targetName: '', targetThumbnail: '', targetUrl: '', isOutgoing: false }, ['targetName', 'targetThumbnail', 'targetUrl', 'isOutgoing']);
 
 	globalThis.Thumbnails = function (sources) { this.sources = sources || []; this.__type = 'Thumbnails'; };
 	globalThis.Thumbnails.prototype.toString = function () { return 'Thumbnails'; };
