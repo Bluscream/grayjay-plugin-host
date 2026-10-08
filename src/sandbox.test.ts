@@ -609,3 +609,139 @@ describe('errors and logging', () => {
 		}
 	});
 });
+
+describe('an injected fetch', () => {
+	// The reason this option exists: a host often already owns the client it must route through, and
+	// a library that called the global directly would make it silently opt out.
+
+	/** A policy whose requests go to `calls` instead of the network. */
+	function injected(calls: string[], answer?: () => Promise<Response>): Partial<HttpPolicy> {
+		return {
+			fetch: (url, init) => {
+				calls.push(`${init.method} ${url}`);
+
+				return answer === undefined
+					? Promise.resolve(new Response('{"from":"injected"}', { status: 200 }))
+					: answer();
+			}
+		};
+	}
+
+	it('is used instead of the global', async () => {
+		const calls: string[] = [];
+		const sandbox = await load(
+			`source.read = function () { return JSON.parse(http.GET('https://example.test/x').body).from; };`,
+			injected(calls)
+		);
+
+		try {
+			expect(await sandbox.call('read')).toBe('injected');
+			expect(calls).toStrictEqual(['GET https://example.test/x']);
+
+			// Not merely "the injected one was called": the global must not also have been, or a caller
+			// routing through a proxy would be leaking half its traffic.
+			expect(made).toStrictEqual([]);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('is never asked for a url the allow-list refuses', async () => {
+		// The boundary is enforced around the injected function, not by it. A caller supplying one
+		// must not have to re-implement the allow-list to stay safe.
+		const calls: string[] = [];
+		const sandbox = await load(
+			`source.read = function () { return http.GET('https://evil.example/collect').code; };`,
+			injected(calls)
+		);
+
+		try {
+			expect(await sandbox.call('read')).toBe(403);
+			expect(calls).toStrictEqual([]);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('is still counted against the request budget', async () => {
+		const calls: string[] = [];
+		const sandbox = await load(
+			`
+			source.read = function () {
+				var ok = 0;
+				for (var i = 0; i < 10; i++) { if (http.GET('https://example.test/' + i).isOk) ok++; }
+				return ok;
+			};
+		`,
+			{ ...injected(calls), maxRequests: 2 }
+		);
+
+		try {
+			expect(await sandbox.call('read')).toBe(2);
+			expect(calls).toHaveLength(2);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('cannot break a feed read by throwing', async () => {
+		// Somebody else's client, so it may fail in ways the global would not. It is treated exactly
+		// like a transport failure, which means the plugin's own `isOk` path runs.
+		const sandbox = await load(
+			`source.read = function () { var r = http.GET('https://example.test/x'); return [r.code, r.isOk]; };`,
+			injected([], () => Promise.reject(new Error('the host client is closed')))
+		);
+
+		try {
+			expect(await sandbox.call('read')).toStrictEqual([504, false]);
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('is given the host user agent to pass on', async () => {
+		let seen: string | null = null;
+		const sandbox = await load(
+			`source.read = function () { return http.GET('https://example.test/x').code; };`,
+			{
+				userAgent: 'creator-site/1.0',
+				fetch: (_url, init) => {
+					seen = init.headers.get('user-agent');
+
+					return Promise.resolve(new Response('', { status: 200 }));
+				}
+			}
+		);
+
+		try {
+			await sandbox.call('read');
+			expect(seen).toBe('creator-site/1.0');
+		} finally {
+			sandbox.dispose();
+		}
+	});
+
+	it('does not override a header the plugin set itself', async () => {
+		// Plugins set their own user agent for platforms that check it, and the host default is a
+		// fallback rather than a policy.
+		let seen: string | null = null;
+		const sandbox = await load(
+			`source.read = function () { return http.GET('https://example.test/x', { 'User-Agent': 'plugin-ua' }).code; };`,
+			{
+				userAgent: 'host-ua',
+				fetch: (_url, init) => {
+					seen = init.headers.get('user-agent');
+
+					return Promise.resolve(new Response('', { status: 200 }));
+				}
+			}
+		);
+
+		try {
+			await sandbox.call('read');
+			expect(seen).toBe('plugin-ua');
+		} finally {
+			sandbox.dispose();
+		}
+	});
+});

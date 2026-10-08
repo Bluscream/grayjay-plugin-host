@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
 import { assertSupported, parseManifest } from './manifest.js';
 import type { Manifest } from './manifest.js';
 import { Sandbox } from './sandbox.js';
+import type { FetchLike } from './http.js';
 import type { Limits, PluginLog } from './sandbox.js';
 import { negotiateFeed } from './feed.js';
 import type { Feed } from './feed.js';
@@ -62,6 +63,15 @@ export interface LoadOptions {
 
 	/** Used for the manifest and script fetches only. The plugin's own requests are unaffected. */
 	readonly fetchTimeoutMs?: number | undefined;
+
+	/**
+	 * What performs every request, the manifest and script fetches included. Defaults to the global.
+	 *
+	 * Passed on to the sandbox as `HttpPolicy.fetch`, so one option covers both this module's two
+	 * fetches and everything the plugin itself asks for — a caller required to route through its own
+	 * client should not have to discover that half the traffic escaped.
+	 */
+	readonly fetch?: FetchLike | undefined;
 }
 
 /** A loaded plugin. */
@@ -133,7 +143,8 @@ export async function loadPlugin(source: string, options: LoadOptions = {}): Pro
 			timeoutMs: options.timeoutMs ?? 20_000,
 			maxRequests: options.maxRequests ?? 60,
 			maxResponseBytes: options.maxResponseBytes ?? 16 * 1024 * 1024,
-			userAgent: options.userAgent ?? DEFAULT_USER_AGENT
+			userAgent: options.userAgent ?? DEFAULT_USER_AGENT,
+			...(options.fetch === undefined ? {} : { fetch: options.fetch })
 		}
 	});
 
@@ -197,8 +208,15 @@ async function fetchText(url: string, options: LoadOptions): Promise<string> {
 	let response: Response;
 
 	try {
-		response = await fetch(url, {
-			headers: { accept: '*/*', 'user-agent': options.userAgent ?? DEFAULT_USER_AGENT },
+		const perform = options.fetch ?? fetch;
+
+		response = await perform(url, {
+			method: 'GET',
+			headers: new Headers({
+				accept: '*/*',
+				'user-agent': options.userAgent ?? DEFAULT_USER_AGENT
+			}),
+			redirect: 'follow',
 			signal: AbortSignal.timeout(options.fetchTimeoutMs ?? 30_000)
 		});
 	} catch (cause) {

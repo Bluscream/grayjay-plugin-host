@@ -58,7 +58,7 @@ export {
 export type { Manifest, PackageName, RawManifest } from './manifest.js';
 
 export { HttpSession } from './http.js';
-export type { HostRequest, HostResponse, HttpPolicy } from './http.js';
+export type { FetchLike, HostRequest, HostResponse, HttpPolicy } from './http.js';
 
 export { DEFAULT_LIMITS, LimitExceeded, PluginError, Sandbox } from './sandbox.js';
 export type { Limits, PluginLog, SandboxOptions } from './sandbox.js';

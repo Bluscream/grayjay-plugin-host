@@ -1,6 +1,6 @@
 {
 	"name": "grayjay-plugin-host",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Run GrayJay source plugins outside the GrayJay app, sandboxed, on Node.",
 	"keywords": [
 		"grayjay",

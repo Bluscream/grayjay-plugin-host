@@ -105,6 +105,22 @@ error handling already takes — several plugins probe optional endpoints delibe
 
 None of this makes it safe to run an arbitrary plugin against a secret. It makes it bounded.
 
+### Route it through your own client
+
+Pass a `fetch` and every request — the manifest, the script, and everything the plugin asks for —
+goes through it. Use it for a proxy, a metrics wrapper, or a user agent and deadline your own code
+already owns:
+
+```ts
+const plugin = await loadPlugin(url, {
+	fetch: (target, init) => myClient(target, init)
+});
+```
+
+The allow-list, the request budget and the response cap are enforced **around** it, not by it: your
+function is never asked for a url the policy has not already approved, and one that throws is
+treated exactly like a transport failure rather than taking down a feed read.
+
 ## What this had to work out
 
 GrayJay's plugin interface is documented; the _host_ interface is not. These were found by running

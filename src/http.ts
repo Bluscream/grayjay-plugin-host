@@ -26,6 +26,25 @@
 
 import { allowsUrl } from './manifest.js';
 
+/**
+ * A replacement for the global `fetch`.
+ *
+ * Typed structurally, and narrowly, rather than as `typeof fetch`: this library uses a method, a
+ * header set, an optional string body, a redirect mode and a signal, and nothing else. A caller can
+ * therefore satisfy it with a small wrapper around their own client instead of having to implement
+ * the whole WHATWG signature.
+ */
+export type FetchLike = (
+	url: string,
+	init: {
+		readonly method: string;
+		readonly headers: Headers;
+		readonly body?: string;
+		readonly redirect: 'follow';
+		readonly signal: AbortSignal;
+	}
+) => Promise<Response>;
+
 /** A request as the sandbox describes one. */
 export interface HostRequest {
 	readonly method: string;
@@ -67,6 +86,21 @@ export interface HttpPolicy {
 
 	/** Called for each request, so a caller can log or count. Never given the response body. */
 	readonly onRequest?: ((event: { method: string; url: string; code: number }) => void) | undefined;
+
+	/**
+	 * What actually performs the request. Defaults to the global `fetch`.
+	 *
+	 * Injectable because a host often already owns an HTTP client it is required to route through —
+	 * one that sets a user agent, carries a proxy, records metrics, or enforces a deadline across the
+	 * whole operation rather than per request. A library that called the global directly would make a
+	 * caller silently opt out of all of that, with no way to notice.
+	 *
+	 * The allow-list, the request budget and the response cap are enforced **around** this, not by
+	 * it: a replacement is never asked for a url the policy has not already approved, and the
+	 * boundary does not depend on it behaving. A replacement that throws is treated exactly like a
+	 * transport failure, so it cannot take down a feed read.
+	 */
+	readonly fetch?: FetchLike | undefined;
 }
 
 /** A refusal that the plugin sees as a failed response rather than an exception. */
@@ -123,7 +157,11 @@ export class HttpSession {
 		let response: Response;
 
 		try {
-			response = await fetch(request.url, {
+			// Resolved per request rather than captured once, so a caller may swap it, and read off the
+			// global at the call rather than at module load, which is what makes it stubbable in a test.
+			const perform = this.policy.fetch ?? fetch;
+
+			response = await perform(request.url, {
 				method: request.method,
 				headers,
 				...(request.body === undefined ? {} : { body: request.body }),
