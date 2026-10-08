@@ -96,10 +96,14 @@ describe('what this host will not run', () => {
 		}).toThrow(/cannot run on this host/);
 	});
 
-	it('refuses DOMParser, which it does not provide yet', () => {
+	it('runs a plugin that needs DOMParser, which is now provided', () => {
+		// This asserted the opposite until the host grew a DOM. Inverted rather than deleted, because
+		// "DOMParser is refused" was the single biggest limitation here, and the assertion that it no
+		// longer is should be what somebody finds when they come looking for it.
 		const manifest = parseManifest({ ...TWITCH, packages: ['Http', 'DOMParser'] });
 
-		expect(unsupportedReasons(manifest)[0]).toMatch(/DOMParser/);
+		expect(unsupportedReasons(manifest)).toStrictEqual([]);
+		expect(manifest.packages).toContain('DOMParser');
 	});
 
 	it('refuses allowEval', () => {

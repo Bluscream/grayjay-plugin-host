@@ -22,6 +22,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { loadPlugin } from './plugin.js';
+import { assertSupported, parseManifest } from './manifest.js';
 import type { Plugin } from './plugin.js';
 
 const live = process.env.RUN_LIVE === '1' ? describe : describe.skip;
@@ -159,16 +160,89 @@ live.each(TARGETS)('the published $name plugin', (target) => {
 	}, 120_000);
 });
 
-live('a plugin this host cannot run', () => {
-	it('is refused by name before its script is fetched', async () => {
-		// YouTube needs DOMParser. The point is the *reason*: an operator reading
-		// "needs DOMParser" knows this is a host limit, where an empty feed would have them
-		// checking YouTube's status page.
-		const failure = await loadPlugin('https://plugins.grayjay.app/Youtube/YoutubeConfig.json')
-			.then(() => null)
-			.catch((cause: unknown) => cause);
+live('a plugin that scrapes HTML', () => {
+	// The DOMParser path against real plugins, which is what makes most of the public index runnable
+	// at all. These three are official or long-standing and all declare `DOMParser`.
+	//
+	// `getHome` rather than a channel: it needs no fixture identity that somebody could delete, and
+	// it is the call that exercises parse-and-walk over a real page of unpredictable markup — which
+	// is where a gap in the host's DOM shows up, and a fixture never would.
+	it.each([
+		['Dailymotion', 'https://plugins.grayjay.app/Dailymotion/DailymotionConfig.json'],
+		['Nebula', 'https://plugins.grayjay.app/Nebula/NebulaConfig.json'],
+		['Bitchute', 'https://plugins.grayjay.app/Bitchute/BitchuteConfig.json']
+	])(
+		'%s loads and returns content',
+		async (name, manifest) => {
+			const lines: string[] = [];
 
-		expect(failure).not.toBeNull();
-		expect((failure as Error).message).toMatch(/DOMParser|HttpImp|cannot run on this host/);
-	}, 120_000);
+			// DOM support is deliberately not passed. The manifest declares `DOMParser`, and
+			// `loadPlugin` turning it on by itself is part of what is being asserted: a caller should
+			// not have to know that a plugin scrapes.
+			const plugin = await loadPlugin(manifest, {
+				onLog: (line) => lines.push(line.message),
+				maxRequests: 120,
+				timeoutMs: 30_000
+			});
+
+			try {
+				const home = await plugin.call('getHome');
+				const results = Array.isArray(home)
+					? home
+					: ((home as { results?: unknown[] } | null)?.results ?? []);
+
+				expect(results.length).toBeGreaterThan(0);
+
+				const first = results[0] as Record<string, unknown>;
+
+				expect(typeof first.name).toBe('string');
+				expect(String(first.name).length).toBeGreaterThan(0);
+				expect(String(first.url)).toMatch(/^https?:\/\//);
+
+				// The nested value class, for the same reason as the Twitch and Kick cases above: it is
+				// what a carrier bug corrupts while the flat fields stay convincing.
+				const id = first.id as Record<string, unknown> | undefined;
+
+				if (id !== undefined) {
+					expect(Object.keys(id).filter((key) => /^\d+$/.test(key))).toStrictEqual([]);
+				}
+			} catch (cause) {
+				throw new Error(
+					`${name}: ${String(cause)}${lines.length > 0 ? `\nplugin log:\n${lines.join('\n')}` : ''}`,
+					{ cause }
+				);
+			} finally {
+				plugin.dispose();
+			}
+		},
+		180_000
+	);
+});
+
+live('a plugin this host cannot run', () => {
+	it('is refused by name rather than left to fail against Cloudflare', () => {
+		// `HttpImp` is the one package that cannot work on Node at any version — it needs a TLS stack
+		// presenting a browser's exact ClientHello. The point is the *reason*: an operator reading
+		// "needs HttpImp" knows this is a host limit, where an empty feed would have them checking the
+		// platform's status page.
+		//
+		// Against a synthesised manifest rather than a named plugin, because which plugins declare
+		// `HttpImp` changes upstream, and a test that fails when somebody else updates their plugin is
+		// testing the wrong thing. The real published manifests are covered in `manifest.test.ts`.
+		const manifest = parseManifest(
+			{
+				id: 'test',
+				name: 'Impersonating',
+				scriptUrl: './Script.js',
+				sourceUrl: 'https://example.invalid/Config.json',
+				packages: ['Http', 'HttpImp'],
+				allowUrls: ['example.invalid']
+			},
+			'https://example.invalid/Config.json'
+		);
+
+		expect(() => {
+			assertSupported(manifest);
+		}).toThrow(/HttpImp/);
+	});
 });

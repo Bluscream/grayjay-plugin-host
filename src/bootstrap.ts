@@ -452,6 +452,402 @@ export const BOOTSTRAP = /* js */ `
 		return out;
 	};
 
+	// ── the exception classes ────────────────────────────────────────────────────────────────
+	// Plugins throw these to tell a host *why* something failed, and several subclass them. They were
+	// missing, and the symptom is the worst kind: a plugin loads, runs, and dies with
+	// \`'ScriptLoginRequiredException' is not defined\` from inside its own error handling — so the
+	// real failure is replaced by a host one at exactly the moment the plugin was explaining itself.
+	//
+	// Real \`Error\` subclasses, so \`instanceof Error\`, \`.message\` and \`.stack\` all behave and the
+	// host's own error reporting picks the message up unchanged. The name is kept on the instance
+	// because that is the part a caller can act on — "this needs a login" is a different answer from
+	// "this is broken".
+	function exception(name, parent) {
+		var Ctor = function (message, extra) {
+			var self = new Error(message === undefined ? name : String(message));
+
+			Object.setPrototypeOf(self, Ctor.prototype);
+			self.name = name;
+			self.msg = self.message;
+			if (extra !== undefined) self.extra = extra;
+
+			return self;
+		};
+
+		Ctor.prototype = Object.create((parent || Error).prototype);
+		Ctor.prototype.constructor = Ctor;
+		globalThis[name] = Ctor;
+
+		return Ctor;
+	}
+
+	var ScriptException = exception('ScriptException');
+
+	// Each of these is thrown by at least one plugin in the public index; the count in brackets is how
+	// many reference it. A caller distinguishes them by \`name\`.
+	exception('CriticalException', ScriptException);          // [4] the plugin cannot continue at all
+	exception('AgeException', ScriptException);               // [5] age-restricted without a sign-in
+	exception('ScriptLoginRequiredException', ScriptException); // [7] needs a platform login
+	exception('LoginRequiredException', ScriptException);     // the same thing under its shorter name
+	exception('ScriptImplementationException', ScriptException);
+	exception('ScriptUnavailableException', ScriptException);
+	exception('ScriptTimeoutException', ScriptException);
+	exception('ScriptAgeException', ScriptException);
+	exception('ReloadRequiredException', ScriptException);
+	exception('UnavailableException', ScriptException);
+	exception('TimeoutException', ScriptException);
+	exception('Exception', ScriptException);
+
+	// ── filters, which a plugin builds to describe its own search ────────────────────────────
+	// [9] plugins construct these. Purely descriptive — a host reads them to render a filter menu —
+	// so carrying the fields is the whole contract.
+	carrier('FilterCapability', { id: '', name: '', value: '' }, ['name', 'value', 'id']);
+	carrier('FilterGroup', { id: '', name: '', filters: [], isMultiSelect: false }, ['name', 'filters', 'isMultiSelect', 'id']);
+	carrier('FilterGroupIDs', { ids: [] }, ['ids']);
+
+	// ── the remaining content classes ────────────────────────────────────────────────────────
+	// \`Comment\` is the one that stops Bitchute loading: it subclasses it, and only \`PlatformComment\`
+	// was defined. The two are the same shape, and plugins use both names.
+	carrier('Comment', { contextUrl: '', author: null, message: '', rating: null, date: 0, replyCount: 0, context: {} });
+
+	carrier('PlatformLockedContent', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '', contentName: '', contentThumbnails: null, unlockUrl: '', lockDescription: '' });
+	carrier('PlatformNestedMediaContent', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '', contentUrl: '', contentName: '', contentDescription: '', contentProvider: '', contentThumbnails: null });
+	carrier('PlatformArticle', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '', thumbnails: null, summary: '' });
+	carrier('PlatformArticleDetails', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '', thumbnails: null, summary: '', segments: [], rating: null });
+	carrier('PlatformWeb', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '' });
+	carrier('PlatformWebDetails', { id: null, name: '', author: null, datetime: 0, url: '', shareUrl: '', html: '' });
+
+	// The segments an article is built from.
+	carrier('ArticleTextSegment', { type: 0, content: '' }, ['content']);
+	carrier('ArticleHeaderSegment', { type: 1, content: '', level: 1 }, ['content', 'level']);
+	carrier('ArticleImagesSegment', { type: 2, images: [], caption: '' }, ['images', 'caption']);
+	carrier('ArticleNestedSegment', { type: 3, nested: null }, ['nested']);
+
+	// ── the remaining media sources ──────────────────────────────────────────────────────────
+	// Byte-range and raw-manifest variants. Nothing here plays media, but a plugin constructs them
+	// while describing what it found and throws on an undefined class before it ever returns.
+	globalThis.VideoUrlRangeSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.AudioUrlRangeSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.HLSWidevineSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.AudioUrlWidevineSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.DashWidevineSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.DashManifestRawSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.DashManifestRawAudioSource = function (obj) { Object.assign(this, obj || {}); };
+	globalThis.UMPSource = function (obj) { Object.assign(this, obj || {}); };
+
+	// A plugin builds one of these to adjust the requests the *app* will make for media. This host
+	// does not play media, so it is carried and never consulted — but it has to exist, because a
+	// plugin constructs it while returning a video's sources.
+	globalThis.RequestModifier = function (obj) { Object.assign(this, obj || {}); };
+
+	// ── URL and URLSearchParams ──────────────────────────────────────────────────────────────
+	// Web platform APIs, so QuickJS has neither, and plugins use them constantly — to build a query,
+	// to read a host and decide which API to call, to resolve a relative link scraped out of a page.
+	// Four plugins in the public index die at load with \`'URL' is not defined\`.
+	//
+	// Parsing is the host's, through its own WHATWG parser: URL is one of those problems that looks
+	// like a regex and is not, and a plugin that resolves a link slightly differently from a browser
+	// follows it somewhere else — which surfaces as a platform returning nothing rather than as a
+	// parsing bug. See url.ts.
+	//
+	// \`URLSearchParams\` is implemented here instead, because it is string work with no parsing
+	// subtleties worth a round trip, and plugins mutate it in loops.
+
+	// Form encoding, which is \`encodeURIComponent\` plus the rules that differ: a space is \`+\`, and
+	// the characters \`!'()~\` are escaped where \`encodeURIComponent\` leaves them alone.
+	function formEncode(value) {
+		return encodeURIComponent(String(value))
+			.replace(/%20/g, '+')
+			.replace(/[!'()~]/g, function (c) { return '%' + c.charCodeAt(0).toString(16).toUpperCase(); });
+	}
+
+	function formDecode(value) {
+		// Two backslashes: this is inside a template literal, so one would be eaten and the guest
+		// would receive \`/+/g\`, which is the regex error "nothing to repeat" at load time.
+		try { return decodeURIComponent(String(value).replace(/\\+/g, ' ')); }
+		catch (e) { return String(value).replace(/\\+/g, ' '); }
+	}
+
+	function URLSearchParams(init) {
+		var pairs = [];
+
+		if (typeof init === 'string') {
+			var text = init.charAt(0) === '?' ? init.slice(1) : init;
+			if (text !== '') {
+				var parts = text.split('&');
+				for (var i = 0; i < parts.length; i++) {
+					if (parts[i] === '') continue;
+					var eq = parts[i].indexOf('=');
+					if (eq === -1) pairs.push([formDecode(parts[i]), '']);
+					else pairs.push([formDecode(parts[i].slice(0, eq)), formDecode(parts[i].slice(eq + 1))]);
+				}
+			}
+		} else if (Array.isArray(init)) {
+			for (var a = 0; a < init.length; a++) pairs.push([String(init[a][0]), String(init[a][1])]);
+		} else if (init && typeof init === 'object') {
+			// A plain object, which is how nearly every plugin builds one.
+			for (var key in init) {
+				if (Object.prototype.hasOwnProperty.call(init, key)) pairs.push([key, String(init[key])]);
+			}
+		}
+
+		this._pairs = pairs;
+	}
+
+	URLSearchParams.prototype.append = function (name, value) { this._pairs.push([String(name), String(value)]); };
+	URLSearchParams.prototype.set = function (name, value) {
+		var found = false;
+		var out = [];
+		for (var i = 0; i < this._pairs.length; i++) {
+			if (this._pairs[i][0] !== String(name)) { out.push(this._pairs[i]); continue; }
+			// \`set\` replaces the first and removes the rest, keeping the first one's position.
+			if (!found) { out.push([String(name), String(value)]); found = true; }
+		}
+		if (!found) out.push([String(name), String(value)]);
+		this._pairs = out;
+	};
+	URLSearchParams.prototype.get = function (name) {
+		for (var i = 0; i < this._pairs.length; i++) if (this._pairs[i][0] === String(name)) return this._pairs[i][1];
+		// Null and not undefined: a plugin tests \`=== null\`.
+		return null;
+	};
+	URLSearchParams.prototype.getAll = function (name) {
+		var out = [];
+		for (var i = 0; i < this._pairs.length; i++) if (this._pairs[i][0] === String(name)) out.push(this._pairs[i][1]);
+		return out;
+	};
+	URLSearchParams.prototype.has = function (name) { return this.get(name) !== null; };
+	URLSearchParams.prototype['delete'] = function (name) {
+		var out = [];
+		for (var i = 0; i < this._pairs.length; i++) if (this._pairs[i][0] !== String(name)) out.push(this._pairs[i]);
+		this._pairs = out;
+	};
+	URLSearchParams.prototype.forEach = function (fn, thisArg) {
+		for (var i = 0; i < this._pairs.length; i++) fn.call(thisArg, this._pairs[i][1], this._pairs[i][0], this);
+	};
+	URLSearchParams.prototype.keys = function () { return this._pairs.map(function (p) { return p[0]; }); };
+	URLSearchParams.prototype.values = function () { return this._pairs.map(function (p) { return p[1]; }); };
+	URLSearchParams.prototype.entries = function () { return this._pairs.map(function (p) { return [p[0], p[1]]; }); };
+	URLSearchParams.prototype.sort = function () { this._pairs.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }); };
+	URLSearchParams.prototype.toString = function () {
+		var out = [];
+		for (var i = 0; i < this._pairs.length; i++) out.push(formEncode(this._pairs[i][0]) + '=' + formEncode(this._pairs[i][1]));
+		return out.join('&');
+	};
+	Object.defineProperty(URLSearchParams.prototype, 'size', {
+		get: function () { return this._pairs.length; }
+	});
+	URLSearchParams.prototype[Symbol.iterator] = function () { return this.entries()[Symbol.iterator](); };
+
+	globalThis.URLSearchParams = URLSearchParams;
+
+	var URL_PARTS = ['href', 'origin', 'protocol', 'username', 'password', 'host', 'hostname',
+		'port', 'pathname', 'search', 'hash'];
+
+	function URL(input, base) {
+		var answer = JSON.parse(__host_url(JSON.stringify({ url: String(input), base: base === undefined ? undefined : String(base) })));
+
+		// A \`TypeError\`, which is what the platform throws and what a plugin's \`catch\` expects.
+		if (answer.error) throw new TypeError(answer.error);
+
+		this._parts = answer.parts;
+		this._params = new URLSearchParams(answer.parts.search);
+	}
+
+	// Every component is a getter, and assigning to one re-parses through the host rather than
+	// patching the string here — which is the only way \`port = ''\` dropping a default port, or
+	// \`protocol\` changing what counts as a valid host, comes out right.
+	for (var pi = 0; pi < URL_PARTS.length; pi++) {
+		(function (name) {
+			Object.defineProperty(URL.prototype, name, {
+				get: function () {
+					// \`search\` is answered from the params object, so a plugin that mutates
+					// \`url.searchParams\` and then reads \`url.search\` or \`url.href\` sees its own change.
+					if (name === 'search') {
+						var query = this._params.toString();
+						return query === '' ? '' : '?' + query;
+					}
+					if (name === 'href') return this._rebuild();
+					return this._parts[name];
+				},
+				set: function (value) {
+					if (name === 'origin') return;
+
+					var next = {};
+					for (var k = 0; k < URL_PARTS.length; k++) next[URL_PARTS[k]] = this._parts[URL_PARTS[k]];
+					next[name] = String(value);
+
+					// \`host\` and \`hostname\`+\`port\` are two spellings of the same thing, so the authority
+					// has to be composed from whichever the plugin actually assigned. Using \`host\`
+					// unconditionally meant \`port = ''\` could not drop a port — the old port was still
+					// sitting inside \`host\`.
+					var authority = name === 'host'
+						? next.host
+						: next.hostname + (next.port ? ':' + next.port : '');
+
+					var candidate = next.protocol + '//' +
+						(next.username ? next.username + (next.password ? ':' + next.password : '') + '@' : '') +
+						authority + next.pathname +
+						(name === 'search' ? String(value) : this.search) +
+						next.hash;
+
+					var answer = JSON.parse(__host_url(JSON.stringify({ url: candidate })));
+
+					// A component a plugin assigned that makes the whole url invalid is ignored, which
+					// is what the platform does — assigning nonsense to \`url.protocol\` is a no-op, not
+					// an exception.
+					if (answer.error) return;
+
+					this._parts = answer.parts;
+					this._params = new URLSearchParams(answer.parts.search);
+				},
+				enumerable: true
+			});
+		})(URL_PARTS[pi]);
+	}
+
+	Object.defineProperty(URL.prototype, 'searchParams', {
+		get: function () { return this._params; },
+		enumerable: true
+	});
+
+	URL.prototype._rebuild = function () {
+		var p = this._parts;
+		var credentials = p.username ? p.username + (p.password ? ':' + p.password : '') + '@' : '';
+
+		return p.protocol + '//' + credentials + p.host + p.pathname + this.search + p.hash;
+	};
+
+	URL.prototype.toString = function () { return this._rebuild(); };
+	URL.prototype.toJSON = function () { return this._rebuild(); };
+
+	globalThis.URL = URL;
+
+	// ── domParser ────────────────────────────────────────────────────────────────────────────
+	// Roughly half the plugin index needs this. The document itself lives on the host, parsed by a
+	// real DOM implementation; what a plugin gets here are thin proxies over integer handles whose
+	// every property read calls back out through \`__host_dom\`.
+	//
+	// That is affordable because none of it is asynchronous: unlike \`http.GET\`, which needs the WASM
+	// stack unwound because a fetch is a promise, querying a parsed document is synchronous work on
+	// the host — so \`__host_dom\` is an ordinary synchronous host function and a property read is one
+	// C call, not a stack unwind.
+	//
+	// \`__host_dom\` is absent when the caller did not enable DOM support, so every entry point checks
+	// for it and says so rather than failing as "undefined is not a function".
+	function dom(message) {
+		if (typeof __host_dom !== 'function') {
+			throw new Error('grayjay-plugin-host was built without DOM support; pass dom: true to enable it');
+		}
+
+		var answer = JSON.parse(__host_dom(JSON.stringify(message)));
+
+		// The host returns a refusal rather than throwing across the boundary, so it becomes a real
+		// error here with its sentence intact.
+		if (answer && answer.error) throw new Error(answer.error);
+
+		return answer;
+	}
+
+	function node(handle) {
+		if (handle === null || handle === undefined) return null;
+
+		var self = {
+			// Exposed so a plugin can tell two references to the same node apart, and so this is
+			// debuggable at all. Not something a plugin should do arithmetic on.
+			__handle: handle,
+
+			querySelector: function (sel) { return node(dom({ op: 'query', h: handle, sel: sel, all: false }).h); },
+			querySelectorAll: function (sel) { return dom({ op: 'query', h: handle, sel: sel, all: true }).hs.map(node); },
+
+			// The \`getElementsBy*\` family, expressed as selectors. A plugin using them gets the same
+			// answer, and the host keeps one query path rather than four.
+			getElementById: function (id) { return node(dom({ op: 'query', h: handle, sel: '#' + id, all: false }).h); },
+			getElementsByClassName: function (name) { return dom({ op: 'query', h: handle, sel: '.' + name, all: true }).hs.map(node); },
+			getElementsByTagName: function (name) { return dom({ op: 'query', h: handle, sel: name, all: true }).hs.map(node); },
+
+			getAttribute: function (name) { return dom({ op: 'attr', h: handle, name: name }).v; },
+			hasAttribute: function (name) { return dom({ op: 'has', h: handle, name: name }).v; },
+
+			// Read eagerly rather than lazily: a plugin that walks attributes reads most of them, and
+			// one call beats one per attribute.
+			getAttributeNames: function () { return Object.keys(dom({ op: 'attrs', h: handle }).v); },
+
+			// A document is released explicitly. Nothing here can observe a plugin dropping its last
+			// reference, so holding the tree until the plugin says so is the only correct behaviour —
+			// and the host caps how much may be held at once.
+			release: function () { dom({ op: 'release', h: handle }); }
+		};
+
+		function property(name) {
+			Object.defineProperty(self, name, {
+				get: function () { return dom({ op: 'get', h: handle, name: name }).v; },
+				enumerable: true
+			});
+		}
+
+		// The properties a scraper reads. Each is a call, which is why there is no attempt to mirror
+		// the whole DOM: an absent one throws by name from the host, which is a sentence a plugin
+		// author can act on.
+		var names = ['textContent', 'innerText', 'innerHTML', 'outerHTML', 'tagName', 'localName',
+			'nodeName', 'nodeType', 'id', 'className', 'value', 'href', 'src', 'title', 'alt', 'type',
+			'name', 'content'];
+		for (var i = 0; i < names.length; i++) property(names[i]);
+
+		function relation(name) {
+			Object.defineProperty(self, name, {
+				get: function () { return node(dom({ op: 'rel', h: handle, which: name }).h); },
+				enumerable: true
+			});
+		}
+
+		var relations = ['parentElement', 'parentNode', 'firstElementChild', 'lastElementChild',
+			'nextElementSibling', 'previousElementSibling'];
+		for (var r = 0; r < relations.length; r++) relation(relations[r]);
+
+		Object.defineProperty(self, 'children', {
+			get: function () { return dom({ op: 'kids', h: handle, elements: true }).hs.map(node); },
+			enumerable: true
+		});
+		Object.defineProperty(self, 'childNodes', {
+			get: function () { return dom({ op: 'kids', h: handle, elements: false }).hs.map(node); },
+			enumerable: true
+		});
+		Object.defineProperty(self, 'classList', {
+			get: function () {
+				var list = dom({ op: 'classes', h: handle }).v;
+
+				// An array with \`contains\`, because that is the one DOMTokenList method scrapers use and
+				// a plain array would make \`classList.contains(...)\` a missing function.
+				list.contains = function (name) { return list.indexOf(name) !== -1; };
+
+				return list;
+			},
+			enumerable: true
+		});
+
+		// The document's own \`body\` and \`documentElement\`, which is where a plugin usually starts.
+		Object.defineProperty(self, 'body', {
+			get: function () { return self.querySelector('body'); },
+			enumerable: true
+		});
+		Object.defineProperty(self, 'documentElement', {
+			get: function () { return self.querySelector('html'); },
+			enumerable: true
+		});
+
+		return self;
+	}
+
+	function parseDocument(html, mime) {
+		return node(dom({ op: 'parse', html: String(html == null ? '' : html), mime: mime || 'text/html' }).h);
+	}
+
+	// Both spellings. \`domParser.parseFromString\` is what the package documents; \`new DOMParser()\` is
+	// what a plugin written against a browser reaches for, and several do both.
+	globalThis.domParser = { parseFromString: parseDocument };
+	globalThis.DOMParser = function () { this.parseFromString = parseDocument; };
+
 	// The injected \`source\`, for plugins that assign to it rather than declaring their own. See
 	// item 6 at the top of this file and \`resolveSource\` in sandbox.ts for the other case.
 	globalThis.source = globalThis.source || {};

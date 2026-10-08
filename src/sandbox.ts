@@ -24,6 +24,9 @@ import { newAsyncContext } from 'quickjs-emscripten';
 import type { QuickJSAsyncContext } from 'quickjs-emscripten';
 import { BOOTSTRAP } from './bootstrap.js';
 import { HttpSession } from './http.js';
+import { DEFAULT_DOM_LIMITS, DomSession } from './dom.js';
+import { performUrl } from './url.js';
+import type { DomLimits } from './dom.js';
 import type { HttpPolicy } from './http.js';
 
 /** What the host will let a plugin consume. */
@@ -73,6 +76,20 @@ export interface SandboxOptions {
 	readonly config?: Readonly<Record<string, unknown>> | undefined;
 
 	readonly onLog?: ((line: PluginLog) => void) | undefined;
+
+	/**
+	 * Whether the plugin may parse HTML, and with what limits.
+	 *
+	 * Off by default. `true` takes `DEFAULT_DOM_LIMITS`, and an object overrides them. A plugin given
+	 * no DOM gets a named error from `domParser` rather than an `undefined is not a function`, which
+	 * matters because a manifest declaring `DOMParser` is refused at load anyway — so reaching that
+	 * error at all means a plugin used it without declaring it.
+	 *
+	 * Opt-in rather than always on because it holds a parsed document on the host heap: that is the
+	 * caller's memory, and a caller who never loads a scraping plugin should not pay for the
+	 * possibility.
+	 */
+	readonly dom?: boolean | Partial<DomLimits> | undefined;
 }
 
 /** A plugin failed on its own terms — its error, not the host's. */
@@ -108,6 +125,14 @@ export class Sandbox {
 	 */
 	private session: HttpSession;
 
+	/**
+	 * The plugin's parsed documents, or null when DOM support is off.
+	 *
+	 * Per sandbox rather than per call, unlike the HTTP session: a plugin legitimately parses a page
+	 * in one call and reads it in the next, whereas requests are the thing that must not accumulate.
+	 */
+	private readonly dom: DomSession | null;
+
 	private constructor(
 		private readonly ctx: QuickJSAsyncContext,
 		private readonly options: SandboxOptions,
@@ -117,6 +142,12 @@ export class Sandbox {
 		private deadline: number
 	) {
 		this.session = new HttpSession(options.http);
+		this.dom =
+			options.dom === undefined || options.dom === false
+				? null
+				: new DomSession(
+						options.dom === true ? undefined : { ...DEFAULT_DOM_LIMITS, ...options.dom }
+					);
 	}
 
 	/**
@@ -204,6 +235,9 @@ export class Sandbox {
 		if (this.disposed) return;
 
 		this.disposed = true;
+
+		// Before the context, so the parsed documents are dropped even if disposing the context throws.
+		this.dom?.clear();
 		this.ctx.dispose();
 	}
 
@@ -231,6 +265,30 @@ export class Sandbox {
 
 		this.ctx.setProp(this.ctx.global, '__host_log', log);
 		log.dispose();
+
+		// Always installed, unlike the DOM: `URL` is a language-level expectation for plugin authors
+		// even though it is not part of the language, and four plugins in the public index fail at
+		// load without it. Synchronous, for the same reason as the DOM bridge.
+		const url = this.ctx.newFunction('__host_url', (handle) =>
+			this.ctx.newString(performUrl(this.ctx.getString(handle)))
+		);
+
+		this.ctx.setProp(this.ctx.global, '__host_url', url);
+		url.dispose();
+
+		// Not asyncified, deliberately. Parsing and querying a document is synchronous work on the
+		// host, so this is an ordinary host function and a guest property read costs one C call rather
+		// than unwinding and resuming the WASM stack — which is what makes a proxy-per-node design
+		// affordable. Installed only when DOM support is on, so the guest can tell.
+		if (this.dom !== null) {
+			const session = this.dom;
+			const parse = this.ctx.newFunction('__host_dom', (handle) =>
+				this.ctx.newString(session.perform(this.ctx.getString(handle)))
+			);
+
+			this.ctx.setProp(this.ctx.global, '__host_dom', parse);
+			parse.dispose();
+		}
 	}
 
 	/** The operator's settings and the manifest, as the plugin reads them. */

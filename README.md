@@ -37,15 +37,30 @@ ask.
 Verified against the **real published plugins**, not against fixtures — `RUN_LIVE=1 npm test` loads
 them over the network and reads a channel and a feed page:
 
-| Plugin                       | Status                          |
-| :--------------------------- | :------------------------------ |
-| **Twitch**                   | loads, reads channels and feeds |
-| **Kick**                     | loads, reads channels and feeds |
-| Anything needing `DOMParser` | refused at load, by name        |
-| Anything needing `HttpImp`   | refused at load, by name        |
+Measured by loading all 112 runnable plugins from the public index and asking each for its home
+feed (`scripts/` is not shipped; the numbers are from the same calls the live tests make):
 
-A plugin is runnable here when its manifest declares nothing outside `packages: ["Http",
-"Utilities"]`. Check before you commit to one:
+| Outcome                                      | Plugins |
+| :------------------------------------------- | ------: |
+| **loaded and returned real content**         |  **45** |
+| loaded and answered with an empty feed       |      17 |
+| loaded, then failed on their own terms       |      11 |
+| loaded, but expose no home feed to test with |       3 |
+| could not be loaded at all                   |      36 |
+
+Two of those rows are mostly not about this library. Of the 36 that could not be loaded, **27 are
+upstream**: the index lists a manifest URL that 404s, has moved, or serves an HTML page instead of
+JSON. The rest divide into platforms refusing the request (403), plugins that require a platform
+login — which this host does not have — and two whose own regexes QuickJS rejects where V8 accepts
+them.
+
+For scale: before `DOMParser`, `URL` and the missing host classes were added, **2** plugins returned
+content. The method names and the number of items are what the live tests assert, so a regression
+here is loud rather than silent.
+
+`Http`, `Utilities` and `DOMParser` are provided; `HttpImp` cannot be. A plugin needing it is
+refused by name at load rather than left to fail against Cloudflare, because an empty feed is
+indistinguishable from a platform being down. Check before you commit to one:
 
 ```ts
 import { parseManifest, unsupportedReasons } from 'grayjay-plugin-host';
@@ -57,11 +72,12 @@ console.log(unsupportedReasons(manifest)); // [] means it will run
 
 ## Known limits, up front
 
-- **`DOMParser` is not provided yet.** Roughly half the indexed plugins need it. They are refused by
-  name at load rather than failing mysteriously three calls later.
 - **`HttpImp` cannot be provided.** TLS fingerprint impersonation needs a stack that presents a
   browser's exact ClientHello, and Node has no such thing. If a platform starts requiring it, its
   plugin stops working here and keeps working in the app.
+- **A few plugins need browser APIs beyond these.** YouTube and TikTok drive a `JSDOM`/`CustomWindow`
+  emulation to run the platform's own scripts, and one reaches for `XMLHttpRequest`. Those are not
+  refused at load — they fail when they get there, because nothing in the manifest declares them.
 - **Script signatures are not verified.** The algorithm is undocumented, and a verification that is
   wrong is worse than none. Pin a hash instead — see below.
 - **No platform login.** A plugin whose manifest declares `authentication` will load and run, and its
@@ -81,6 +97,33 @@ const plugin = await loadPlugin(url, { expectHash: 'e3b0c442…' });
 Record `plugin.scriptHash` once and pass it back. An upstream change then fails the load loudly
 instead of deploying itself. Omitting it is a real choice and not a wrong one — it is how the app
 behaves — but it should be a choice.
+
+## Parsing HTML
+
+About half the plugin index scrapes, so `domParser` and `new DOMParser()` are provided and **on by
+default**. Pass `dom: false` to forbid it, or an object to change the limits.
+
+The document is parsed on the host by [`linkedom`](https://github.com/WebReflection/linkedom) and the
+sandbox gets integer handles; the guest's node objects are thin proxies. That is affordable because
+none of it is asynchronous — unlike `http.GET`, which needs the WASM stack unwound because a fetch is
+a promise, querying a parsed document is synchronous work, so it is one ordinary host call per
+property read.
+
+Query, read attributes and text, walk the element relations. Mutation is deliberately absent, which
+keeps it a one-way boundary. A property outside the supported set reads as `undefined` rather than
+throwing, because plugins probe — and the supported set is enforced on the host, since a plugin can
+call the bridge directly and forwarding an arbitrary name to a real node would hand it
+`constructor`.
+
+Documents are **evicted, oldest first**, not refused, once more than `maxDocuments` are held. There
+is no `release` in GrayJay's own API, so no real plugin calls one, and a cap that refused would stop
+any plugin that reads page after page. Handles come from a counter that never rewinds, so a node
+from an evicted document is refused rather than quietly naming a different page's content.
+
+`URL` and `URLSearchParams` are provided too — QuickJS has neither. Parsing goes through the host's
+own WHATWG parser rather than a regex here, because a plugin that resolves a scraped relative link
+differently from a browser follows it somewhere else, and that surfaces as a platform returning
+nothing.
 
 ## Sandboxing
 

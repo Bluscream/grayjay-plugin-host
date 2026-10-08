@@ -22,6 +22,7 @@ import { assertSupported, parseManifest } from './manifest.js';
 import type { Manifest } from './manifest.js';
 import { Sandbox } from './sandbox.js';
 import type { FetchLike } from './http.js';
+import type { DomLimits } from './dom.js';
 import type { Limits, PluginLog } from './sandbox.js';
 import { negotiateFeed } from './feed.js';
 import type { Feed } from './feed.js';
@@ -72,6 +73,19 @@ export interface LoadOptions {
 	 * client should not have to discover that half the traffic escaped.
 	 */
 	readonly fetch?: FetchLike | undefined;
+
+	/**
+	 * Whether the plugin may parse HTML. **On by default.**
+	 *
+	 * It was manifest-driven at first — on only when the manifest declared `DOMParser` — and that was
+	 * wrong twice over. Plugins parse HTML without declaring the package (PHUB is one), so the
+	 * manifest is not a reliable signal; and the cost it was avoiding does not exist, because a
+	 * session holds an empty table until something is actually parsed. Nothing was being saved and
+	 * working plugins were being broken.
+	 *
+	 * Pass `false` to forbid it outright, or an object to set the limits.
+	 */
+	readonly dom?: boolean | Partial<DomLimits> | undefined;
 }
 
 /** A loaded plugin. */
@@ -138,6 +152,8 @@ export async function loadPlugin(source: string, options: LoadOptions = {}): Pro
 		settings: defaults(manifest, options.settings),
 		config: manifest.raw,
 		onLog: options.onLog,
+
+		dom: options.dom ?? true,
 		http: {
 			allowUrls: manifest.allowUrls,
 			timeoutMs: options.timeoutMs ?? 20_000,

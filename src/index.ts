@@ -34,11 +34,12 @@
  *
  * ### Known limits, up front
  *
- * - **`DOMParser` is not provided yet.** 59 of the 117 indexed plugins need it, and those are
- *   refused by name at load rather than failing mysteriously later.
  * - **`HttpImp` cannot be provided.** TLS fingerprint impersonation needs a TLS stack that presents
  *   a browser's exact ClientHello; Node has no such thing. When a platform starts requiring it, its
  *   plugin stops working here and keeps working in the app.
+ * - **A few plugins need browser APIs beyond `DOMParser`.** YouTube and TikTok drive a
+ *   `JSDOM`/`CustomWindow` emulation to run the platform's own scripts. Nothing in a manifest
+ *   declares that, so they fail when they reach it rather than being refused at load.
  * - **Script signatures are not verified.** The algorithm is undocumented, and a verification that
  *   is wrong is worse than none. Pin a version and record a hash of the script instead.
  * - **No platform login.** A plugin whose manifest declares `authentication` will load and run, and
@@ -57,8 +58,14 @@ export {
 } from './manifest.js';
 export type { Manifest, PackageName, RawManifest } from './manifest.js';
 
+export { DEFAULT_DOM_LIMITS, DomRefused, DomSession } from './dom.js';
+export type { DomLimits } from './dom.js';
+
 export { HttpSession } from './http.js';
 export type { FetchLike, HostRequest, HostResponse, HttpPolicy } from './http.js';
+
+export { parseUrl } from './url.js';
+export type { UrlAnswer, UrlParts } from './url.js';
 
 export { DEFAULT_LIMITS, LimitExceeded, PluginError, Sandbox } from './sandbox.js';
 export type { Limits, PluginLog, SandboxOptions } from './sandbox.js';

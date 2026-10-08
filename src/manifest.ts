@@ -33,10 +33,13 @@ export type PackageName = (typeof PACKAGES)[number];
  * requiring it is refused rather than run and left to fail against Cloudflare, because an empty feed
  * is indistinguishable from a platform being down.
  *
- * `DOMParser` is not here yet, and that is a real limitation rather than an oversight: 59 plugins
- * need it. See the README.
+ * `DOMParser` is provided — the document is parsed on the host and the sandbox gets handles, see
+ * `dom.ts`. It is listed here because a manifest is checked before a sandbox exists, so this is the
+ * answer to "could this plugin run at all" rather than "is DOM switched on for this one". A plugin
+ * declaring it and loaded without `dom: true` gets a named error from `domParser` instead of an
+ * `undefined is not a function`.
  */
-export const PROVIDED: readonly PackageName[] = ['Http', 'Utilities'];
+export const PROVIDED: readonly PackageName[] = ['Http', 'Utilities', 'DOMParser'];
 
 /** A setting a plugin exposes, which the operator supplies a value for. */
 const settingSchema = z
