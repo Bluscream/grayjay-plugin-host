@@ -1,0 +1,146 @@
+/**
+ * The real thing: the published Twitch and Kick plugins, fetched and run.
+ *
+ * Everything else in this suite is offline and deterministic, and none of it can tell you whether
+ * this library actually hosts GrayJay plugins — only whether it behaves as its own author imagined.
+ * This file is the one that answers the question, so it is also the one that breaks when upstream
+ * changes a plugin or a platform changes an API.
+ *
+ * It is therefore **opt-in**: set `RUN_LIVE=1`. Off by default because it reaches two third-party
+ * platforms, and a test suite that quietly makes network requests to someone else's service on every
+ * `npm test` is a bad citizen regardless of how useful it is.
+ *
+ * ```sh
+ * RUN_LIVE=1 npm test
+ * ```
+ *
+ * Both plugins declare `packages: ["Http"]`, which is why these two: they are the plugins this host
+ * can run today. A failure here is as likely to be upstream or a platform as it is to be this
+ * library — the assertions are deliberately loose about *content* (a channel's follower count is not
+ * this library's business) and strict about *shape*.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { loadPlugin } from './plugin.js';
+import type { Plugin } from './plugin.js';
+
+const live = process.env.RUN_LIVE === '1' ? describe : describe.skip;
+
+/** A channel that has existed for years and is not going to be deleted mid-test. */
+interface Target {
+	readonly name: string;
+	readonly manifest: string;
+	readonly channel: string;
+}
+
+const TARGETS: readonly Target[] = [
+	{
+		name: 'Twitch',
+		manifest: 'https://plugins.grayjay.app/Twitch/TwitchConfig.json',
+		channel: 'https://www.twitch.tv/twitch'
+	},
+	{
+		name: 'Kick',
+		manifest: 'https://plugins.grayjay.app/Kick/KickConfig.json',
+		channel: 'https://kick.com/xqc'
+	}
+];
+
+/** Loads a plugin and hands it to `body`, always disposing it. */
+async function withPlugin(target: Target, body: (plugin: Plugin) => Promise<void>): Promise<void> {
+	const lines: string[] = [];
+	const plugin = await loadPlugin(target.manifest, {
+		onLog: (line) => lines.push(line.message),
+		maxRequests: 80,
+		timeoutMs: 30_000
+	});
+
+	try {
+		await body(plugin);
+	} catch (cause) {
+		// A plugin's own log is usually the only explanation of why it refused, and without it a
+		// failure here is a message with no context in somebody's CI output.
+		if (lines.length > 0) {
+			throw new Error(`${target.name}: ${String(cause)}\nplugin log:\n${lines.join('\n')}`, {
+				cause
+			});
+		}
+
+		throw cause;
+	} finally {
+		plugin.dispose();
+	}
+}
+
+live.each(TARGETS)('the published $name plugin', (target) => {
+	it('loads, and reports the methods it really has', async () => {
+		// The load itself is most of the test: the plugin's own top-level code runs, which is where
+		// a missing host global shows up. `getChannel` and a feed method are what any useful reader
+		// needs, so their absence means this host loaded something it cannot use.
+		await withPlugin(target, async (plugin) => {
+			const methods = await plugin.methods();
+
+			expect(methods.length).toBeGreaterThan(5);
+			expect(methods).toContain('getChannel');
+			expect(await plugin.has('getChannelContents')).toBe(true);
+			expect(plugin.scriptHash).toMatch(/^[0-9a-f]{64}$/);
+		});
+	}, 120_000);
+
+	it('reads a channel', async () => {
+		// One real request through the asyncified bridge, parsed by real plugin code. If the sync
+		// HTTP shim were subtly wrong this is where it would show.
+		await withPlugin(target, async (plugin) => {
+			const channel = (await plugin.call('getChannel', [target.channel])) as Record<
+				string,
+				unknown
+			>;
+
+			expect(typeof channel.name).toBe('string');
+			expect(String(channel.name).length).toBeGreaterThan(0);
+			expect(String(channel.url)).toContain(new URL(target.channel).hostname.replace('www.', ''));
+		});
+	}, 120_000);
+
+	it('reads a page of that channel content, with the type negotiated', async () => {
+		await withPlugin(target, async (plugin) => {
+			const feed = await plugin.feed(target.channel);
+
+			// Not `toBeGreaterThan(0)`: a channel can legitimately have an empty page, and a test
+			// that fails because somebody deleted their videos is a test nobody trusts. The shape
+			// is what this library is responsible for.
+			expect(Array.isArray(feed.results)).toBe(true);
+			expect(typeof feed.hasMore).toBe('boolean');
+
+			if (feed.results.length > 0) {
+				const first = feed.results[0] as Record<string, unknown>;
+
+				expect(typeof first.name).toBe('string');
+				expect(typeof first.url).toBe('string');
+			}
+		});
+	}, 180_000);
+
+	it('is refused when the recorded script hash no longer matches', async () => {
+		// The pinning path, tested with a hash that cannot be right. Worth a live test because its
+		// whole purpose is to fire against a *real* upstream change, and a version-pinning check
+		// that silently never fires is worse than none.
+		await expect(loadPlugin(target.manifest, { expectHash: '0'.repeat(64) })).rejects.toThrow(
+			/upstream changed the plugin/
+		);
+	}, 120_000);
+});
+
+live('a plugin this host cannot run', () => {
+	it('is refused by name before its script is fetched', async () => {
+		// YouTube needs DOMParser. The point is the *reason*: an operator reading
+		// "needs DOMParser" knows this is a host limit, where an empty feed would have them
+		// checking YouTube's status page.
+		const failure = await loadPlugin('https://plugins.grayjay.app/Youtube/YoutubeConfig.json')
+			.then(() => null)
+			.catch((cause: unknown) => cause);
+
+		expect(failure).not.toBeNull();
+		expect((failure as Error).message).toMatch(/DOMParser|HttpImp|cannot run on this host/);
+	}, 120_000);
+});

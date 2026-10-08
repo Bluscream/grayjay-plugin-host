@@ -1,0 +1,49 @@
+# Format, lint, typecheck, build and test.
+#
+# Only `workflow_dispatch` is active. Workflows do not run under this repository's owning account —
+# an automatically triggered job is queued and never picked up, so a status check that waits on one
+# would block forever. The automatic triggers are kept below rather than deleted: if you fork this
+# repository under an account where Actions work, remove the comment markers and you have CI.
+#
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
+#   schedule:
+#     # The live tests are the only thing that notices an upstream plugin change, which is exactly
+#     # the kind of break this library exists to absorb. Weekly is enough.
+#     - cron: '17 6 * * 1'
+
+name: gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Also run the live tests against the real published plugins (network)'
+        type: boolean
+        default: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `better-sqlite3` and friends are not dependencies here, but npm still gates install scripts;
+      # `npm ci` honours the `allowScripts` pinned in package.json.
+      - run: npm ci
+
+      - run: npm run gate
+
+      - name: live tests
+        if: inputs.live
+        env:
+          RUN_LIVE: '1'
+        run: npm test

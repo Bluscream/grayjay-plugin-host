@@ -1,0 +1,63 @@
+{
+	"name": "grayjay-plugin-host",
+	"version": "0.1.0",
+	"description": "Run GrayJay source plugins outside the GrayJay app, sandboxed, on Node.",
+	"keywords": [
+		"grayjay",
+		"plugin",
+		"sandbox",
+		"quickjs",
+		"youtube",
+		"twitch",
+		"kick"
+	],
+	"license": "MIT",
+	"author": "Bluscream",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Bluscream/grayjay-plugin-host.git"
+	},
+	"bugs": {
+		"url": "https://github.com/Bluscream/grayjay-plugin-host/issues"
+	},
+	"homepage": "https://github.com/Bluscream/grayjay-plugin-host#readme",
+	"type": "module",
+	"engines": {
+		"node": ">=20"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"lint": "eslint .",
+		"format:check": "prettier --check .",
+		"format": "prettier --write .",
+		"test": "vitest run",
+		"test:live": "RUN_LIVE=1 vitest run",
+		"gate": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test",
+		"prepublishOnly": "npm run gate"
+	},
+	"dependencies": {
+		"quickjs-emscripten": "^0.31.0",
+		"zod": "^4.0.0"
+	},
+	"devDependencies": {
+		"@eslint/js": "^10.0.1",
+		"@types/node": "^26.6.4",
+		"eslint": "^10.12.0",
+		"prettier": "^3.9.9",
+		"typescript": "^6.0.3",
+		"typescript-eslint": "^8.71.1",
+		"vitest": "^5.0.3"
+	}
+}
