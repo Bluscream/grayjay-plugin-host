@@ -26,6 +26,7 @@ import { BOOTSTRAP } from './bootstrap.js';
 import { HttpSession } from './http.js';
 import { DEFAULT_DOM_LIMITS, DomSession } from './dom.js';
 import { performUrl } from './url.js';
+import { performHash } from './hash.js';
 import type { DomLimits } from './dom.js';
 import type { HttpPolicy } from './http.js';
 
@@ -275,6 +276,15 @@ export class Sandbox {
 
 		this.ctx.setProp(this.ctx.global, '__host_url', url);
 		url.dispose();
+
+		// Also always installed: `utility.md5String` is used by eight plugins to sign requests, and
+		// QuickJS has no crypto. Synchronous, like the URL and DOM bridges.
+		const hash = this.ctx.newFunction('__host_hash', (handle) =>
+			this.ctx.newString(performHash(this.ctx.getString(handle)))
+		);
+
+		this.ctx.setProp(this.ctx.global, '__host_hash', hash);
+		hash.dispose();
 
 		// Not asyncified, deliberately. Parsing and querying a document is synchronous work on the
 		// host, so this is an ordinary host function and a guest property read costs one C call rather

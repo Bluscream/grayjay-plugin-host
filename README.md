@@ -209,9 +209,14 @@ one:
     (`new PlatformID(platform, value, pluginId)`). Assuming the object form everywhere is silent,
     not loud: `for (var k in 'kick')` walks a string's indices, so an id arrives as
     `{ 0: 'k', 1: 'i', ... }` that serialises cleanly and carries nothing.
-11. **A plugin may populate a field next to the documented one.** Kick's videos leave `datetime` at
+11. **The `utility` members are not the ones you would guess.** Plugins call `utility.md5String`,
+    `utility.toBase64` (bytes in) and `utility.fromBase64` (bytes out). A stub provided here for
+    `utility.md5` was never reached by anything while every plugin wanting a digest got
+    `undefined is not a function` — a stub for a name nobody uses reads as deliberate and is worse
+    than nothing.
+12. **A plugin may populate a field next to the documented one.** Kick's videos leave `datetime` at
     `0` and put unix seconds in `uploadDate`, so read both before deciding a feed has no dates.
-12. **The declared feed capabilities cannot be trusted.** TikTok's `getChannelCapabilities()` returns
+13. **The declared feed capabilities cannot be trusted.** TikTok's `getChannelCapabilities()` returns
     `["VIDEOS","MIXED","LIVE"]` and the plugin then refuses `VIDEOS`; YouTube refuses `MIXED`. A host
     has to _try_, in an order, and treat a refusal as "not this one".
 

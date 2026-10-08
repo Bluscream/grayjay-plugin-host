@@ -243,6 +243,29 @@ live('a plugin allowed everywhere', () => {
 	}, 180_000);
 });
 
+live('a plugin that signs its requests', () => {
+	it('reads a platform that needs a digest and base64', async () => {
+		// Niconico uses `utility.toBase64` and `utility.md5String`, neither of which existed here —
+		// and a throwing `md5` stub was provided for a name no plugin calls, so the real members
+		// came back `undefined`. Its home feed went from 0 items to 82 once they were added.
+		const plugin = await loadPlugin('https://plugins.grayjay.app/Niconico/NiconicoConfig.json', {
+			maxRequests: 150,
+			timeoutMs: 30_000
+		});
+
+		try {
+			const home = await plugin.call('getHome');
+			const results = Array.isArray(home)
+				? home
+				: ((home as { results?: unknown[] } | null)?.results ?? []);
+
+			expect(results.length).toBeGreaterThan(0);
+		} finally {
+			plugin.dispose();
+		}
+	}, 180_000);
+});
+
 live('a plugin this host cannot run', () => {
 	it('is refused by name rather than left to fail against Cloudflare', () => {
 		// `HttpImp` is the one package that cannot work on Node at any version — it needs a TLS stack

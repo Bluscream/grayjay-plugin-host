@@ -65,6 +65,8 @@ export type { DomLimits } from './dom.js';
 export { HttpSession, isPrivateHost } from './http.js';
 export type { FetchLike, HostRequest, HostResponse, HttpPolicy } from './http.js';
 
+export { performHash } from './hash.js';
+
 export { parseUrl } from './url.js';
 export type { UrlAnswer, UrlParts } from './url.js';
 

@@ -385,8 +385,55 @@ export const BOOTSTRAP = /* js */ `
 			for (var i = 0; i < 32; i++) { out += Math.floor(Math.random() * 16).toString(16); }
 			return out.slice(0, 8) + '-' + out.slice(8, 12) + '-4' + out.slice(13, 16) + '-a' + out.slice(17, 20) + '-' + out.slice(20, 32);
 		},
-		md5: function () { throw new Error('grayjay-plugin-host does not provide utility.md5 yet'); }
+		// Eight plugins sign requests with this — BiliBili its API calls, YouTube a fingerprint of the
+		// player script. Computed by the host: a hand-written MD5 whose output is subtly wrong is
+		// rejected by the platform as a bad signature with no clue that the hash is at fault.
+		//
+		// The member is \`md5String\`, not \`md5\`. This file had a throwing \`md5\` stub for a while, which
+		// no plugin ever reached, while every plugin that wanted a digest got \`undefined is not a
+		// function\` — a stub for a name nobody uses is worse than nothing, because it reads as
+		// deliberate.
+		md5String: function (text) {
+			var answer = JSON.parse(__host_hash(JSON.stringify({ algorithm: 'md5', text: String(text) })));
+
+			if (answer.error) throw new Error(answer.error);
+
+			return answer.hex;
+		},
+
+		sha1String: function (text) { return digest('sha1', text); },
+		sha256String: function (text) { return digest('sha256', text); },
+
+		// Bytes in, base64 out. Nine plugins use this, every one of them passing a byte array —
+		// \`utility.toBase64(string_to_bytes(...))\` — so an array is the signature that matters. A
+		// string is accepted too and treated as one byte per character, which is what \`btoa\` does.
+		toBase64: function (bytes) {
+			if (typeof bytes === 'string') return btoa(bytes);
+
+			var text = '';
+			for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i] & 255);
+
+			return btoa(text);
+		},
+
+		// Base64 in, bytes out — a real array, because the one plugin using it spreads the result into
+		// \`String.fromCharCode(...)\`, which a string would not survive meaningfully.
+		fromBase64: function (text) {
+			var decoded = atob(String(text));
+			var out = [];
+			for (var i = 0; i < decoded.length; i++) out.push(decoded.charCodeAt(i));
+
+			return out;
+		}
 	};
+
+	function digest(algorithm, text) {
+		var answer = JSON.parse(__host_hash(JSON.stringify({ algorithm: algorithm, text: String(text) })));
+
+		if (answer.error) throw new Error(answer.error);
+
+		return answer.hex;
+	}
 
 	// Base64. QuickJS is an ES engine, not a browser, so it has neither of these — they are Web
 	// platform APIs, not language ones. The Twitch plugin calls \`btoa\` while building its GraphQL
